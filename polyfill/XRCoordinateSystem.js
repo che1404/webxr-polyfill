@@ -1,26 +1,44 @@
 import MatrixMath from './fill/MatrixMath.js'
-import XRCoordinates from './XRCoordinates.js'
 
 /*
 XRCoordinateSystem represents the origin of a 3D coordinate system positioned at a known frame of reference.
 The XRCoordinateSystem is a string from XRCoordinateSystem.TYPES:
 
+These types are used by the app code when requesting a coordinate system from the session:
 - XRCoordinateSystem.HEAD_MODEL: origin is aligned with the pose of the head, as sensed by HMD or handset trackers
 - XRCoordinateSystem.EYE_LEVEL: origin is at a fixed distance above the ground
+
+This is an internal type, specific to just this polyfill and not visible to the app code
 - XRCoordinateSystem.TRACKER: The origin of this coordinate system is at floor level at or below the origin of the HMD or handset provided tracking system
-- XRCoordinateSystem.GEOSPATIAL: origin is at the East, Up, South plane tangent to the planet at the latitude, longitude, and altitude represented by the `XRCoordinateSystem.cartographicCoordinates`.
 
 */
 export default class XRCoordinateSystem {
-	constructor(display, type, cartographicCoordinates=null){
+	constructor(display, type){
 		this._display = display
 		this._type = type
-		this._cartographicCoordinates = cartographicCoordinates
+
+		this.__relativeMatrix = MatrixMath.mat4_generateIdentity()
+		this._workingMatrix = MatrixMath.mat4_generateIdentity()
 	}
 
-	get cartographicCoordinates(){ return this._cartographicCoordinates }
+	getTransformTo(otherCoordinateSystem){
+		// apply inverse of the poseModelMatrix to the identity matrix
+		let inverse = MatrixMath.mat4_invert(new Float32Array(16), otherCoordinateSystem._poseModelMatrix)
+		let out = MatrixMath.mat4_generateIdentity()
+		MatrixMath.mat4_multiply(out, inverse, out)
 
-	get type(){ return this._type }
+		// apply the other system's poseModelMatrix
+		MatrixMath.mat4_multiply(out, this._poseModelMatrix, out)
+		return out
+	}
+
+	get _relativeMatrix(){ return this.__relativeMatrix }
+
+	set _relativeMatrix(value){
+		for(let i=0; i < 16; i++){
+			this.__relativeMatrix[i] = value[i]
+		}
+	}
 
 	get _poseModelMatrix(){
 		switch(this._type){
@@ -29,45 +47,20 @@ export default class XRCoordinateSystem {
 			case XRCoordinateSystem.EYE_LEVEL:
 				return this._display._eyeLevelPose.poseModelMatrix
 			case XRCoordinateSystem.TRACKER:
-				return this._display._trackerPoseModelMatrix
-			case XRCoordinateSystem.GEOSPATIAL:
-				throw 'This polyfill does not yet handle geospatial coordinate systems'
+				MatrixMath.mat4_multiply(this._workingMatrix, this.__relativeMatrix, this._display._trackerPoseModelMatrix)
+				return this._workingMatrix
 			default:
-				throw 'Unknown coordinate system type: ' + this._type
+				throw new Error('Unknown coordinate system type: ' + this._type)
 		}
-	}
-
-	getCoordinates(position=[0,0,0], orientation=[0,0,0,1]){
-		return new XRCoordinates(this._display, this, position, orientation)
-	}
-	
-	getTransformTo(otherCoordinateSystem){
-		let out = new Float32Array([
-			1, 0, 0, 0,
-			0, 1, 0, 0,
-			0, 0, 1, 0,
-			0, 0, 0, 1
-		])
-
-		// apply inverse of other system's poseModelMatrix to the identity matrix
-		let inverse = new Float32Array(16)
-		MatrixMath.mat4_invert(inverse, otherCoordinateSystem._poseModelMatrix)
-		MatrixMath.mat4_multiply(out, inverse, out)
-
-		// apply this system's poseModelMatrix
-		MatrixMath.mat4_multiply(out, this._poseModelMatrix, out)
-		return out
 	}
 }
 
 XRCoordinateSystem.HEAD_MODEL = 'headModel'
 XRCoordinateSystem.EYE_LEVEL = 'eyeLevel'
 XRCoordinateSystem.TRACKER = 'tracker'
-XRCoordinateSystem.GEOSPATIAL = 'geospatial'
 
 XRCoordinateSystem.TYPES = [
 	XRCoordinateSystem.HEAD_MODEL,
 	XRCoordinateSystem.EYE_LEVEL,
 	XRCoordinateSystem.TRACKER,
-	XRCoordinateSystem.GEOSPATIAL
 ]

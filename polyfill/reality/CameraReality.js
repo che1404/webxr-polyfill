@@ -1,7 +1,7 @@
 import Reality from '../Reality.js'
 import XRAnchor from '../XRAnchor.js'
 import XRViewPose from '../XRViewPose.js'
-import XRCoordinates from '../XRCoordinates.js'
+
 import XRAnchorOffset from '../XRAnchorOffset.js'
 
 import MatrixMath from '../fill/MatrixMath.js'
@@ -54,15 +54,18 @@ export default class CameraReality extends Reality {
 						if(this._elContext === null){
 							throw 'Could not create CameraReality GL context'
 						}
-						window.addEventListener('resize', () => {
-							this._arCoreCanvas.width = window.innerWidth
-							this._arCoreCanvas.height = window.innerHeight
-						}, false)
 						break
 					}
 				}
 			})
 		}
+
+		window.addEventListener('resize', () => {
+			if(this._arCoreCanvas){
+				this._arCoreCanvas.width = window.innerWidth
+				this._arCoreCanvas.height = window.innerHeight
+			}
+		}, false)
 	}
 
 	/*
@@ -116,19 +119,26 @@ export default class CameraReality extends Reality {
 					this._running = false
 				})
 			} else {
+				this._xr._realityEls.appendChild(this._videoEl)
 				this._videoEl.play()
 			}
 		}
 	}
 
 	_stop(){
+		if(this._running === false) return
+		this._running = false
 		if(ARKitWrapper.HasARKit()){
 			if(this._arKitWrapper === null){
 				return
 			}
 			this._arKitWrapper.stop()
+		} else if(this._arCoreCanvas){
+			this._xr._realityEls.removeChild(this._arCoreCanvas)
+			this._arCoreCanvas = null
 		} else if(this._videoEl !== null){
 			this._videoEl.pause()
+			this._xr._realityEls.removeChild(this._videoEl)
 		}
 	}
 
@@ -151,14 +161,13 @@ export default class CameraReality extends Reality {
 			return
 		}
 		// This assumes that the anchor's coordinates are in the tracker coordinate system
-		anchor.coordinates.poseMatrix = this._arKitWrapper.flattenARMatrix(anchorInfo.transform)
+		anchor.coordinateSystem._relativeMatrix = anchorInfo.transform
 	}
 
 	_addAnchor(anchor, display){
 		// Convert coordinates to the tracker coordinate system so that updating from ARKit transforms is simple
-		anchor.coordinates = anchor.coordinates.getTransformedCoordinates(display._trackerCoordinateSystem)
 		if(this._arKitWrapper !== null){
-			this._arKitWrapper.addAnchor(anchor.uid, this._arKitWrapper.createARMatrix(anchor.coordinates.poseMatrix)).then(
+			this._arKitWrapper.addAnchor(anchor.uid, anchor.coordinateSystem._poseModelMatrix).then(
 				detail => this._handleARKitAddObject(detail)
 			)
 		}
@@ -198,9 +207,9 @@ export default class CameraReality extends Reality {
 
 					let anchor = this._getAnchor(hit.uuid)
 					if(anchor === null){
-						let anchorCoordinates = new XRCoordinates(display, display._trackerCoordinateSystem)
-						anchorCoordinates.poseMatrix = hit.anchor_transform
-						anchor = new XRAnchor(anchorCoordinates, hit.uuid)
+						let coordinateSystem = new XRCoordinateSystem(display, XRCoordinateSystem.TRACKER)
+						coordinateSystem._relativeMatrix = hit.anchor_transform
+						anchor = new XRAnchor(coordinateSystem, hit.uuid)
 						this._anchors.set(anchor.uid, anchor)
 					}
 
@@ -226,10 +235,10 @@ export default class CameraReality extends Reality {
 				hits.sort((a, b) => a.distance - b.distance)
 				let anchor = this._getAnchor(hits[0].uuid)
 				if(anchor === null){
-					let coordinates = new XRCoordinates(display, display._trackerCoordinateSystem)
-					coordinates.poseMatrix = hits[0].modelMatrix
-					coordinates._poseMatrix[13] += XRViewPose.SITTING_EYE_HEIGHT
-					anchor = new XRAnchor(coordinates)
+					let coordinateSystem = new XRCoordinateSystem(display, XRCoordinateSystem.TRACKER)
+					coordinateSystem._relativeMatrix = hits[0].modelMatrix
+					coordinateSystem._relativeMatrix[13] += XRViewPose.SITTING_EYE_HEIGHT
+					anchor = new XRAnchor(coordinateSystem)
 					this._anchors.set(anchor.uid, anchor)
 				}
 				resolve(new XRAnchorOffset(anchor.uid))
@@ -245,37 +254,36 @@ export default class CameraReality extends Reality {
 		this._anchors.delete(uid)
 	}
 
-	_pickARKitHit(data){
-		if(data.planes.length === 0 && data.points.length === 0) return null
-		let info = null
+    _pickARKitHit(data) {
+        if (data.length === 0) return null
+        let info = null
 
-		if(data.planes.length > 0) {
-			let planeResults = data.planes;
+        let planeResults = data.filter(
+            hitTestResult => hitTestResult.type != ARKitWrapper.HIT_TEST_TYPE_FEATURE_POINT
+        )
+        let planeExistingUsingExtentResults = planeResults.filter(
+            hitTestResult => hitTestResult.type == ARKitWrapper.HIT_TEST_TYPE_EXISTING_PLANE_USING_EXTENT
+        )
+        let planeExistingResults = planeResults.filter(
+            hitTestResult => hitTestResult.type == ARKitWrapper.HIT_TEST_TYPE_EXISTING_PLANE
+        )
 
-			let planeExistingUsingExtentResults = planeResults.filter(
-				hitTestResult => hitTestResult.point.type == ARKitWrapper.HIT_TEST_TYPE_EXISTING_PLANE_USING_EXTENT
-			)
-			let planeExistingResults = planeResults.filter(
-				hitTestResult => hitTestResult.point.type == ARKitWrapper.HIT_TEST_TYPE_EXISTING_PLANE
-			)
-
-			if(planeExistingUsingExtentResults.length) {
-				// existing planes using extent first
-				planeExistingUsingExtentResults = planeExistingUsingExtentResults.sort((a, b) => a.point.distance - b.point.distance)
-				info = planeExistingUsingExtentResults[0]
-			} else if(planeExistingResults.length) {
-				// then other existing planes
-				planeExistingResults = planeExistingResults.sort((a, b) => a.point.distance - b.point.distance)
-				info = planeExistingResults[0]
-			} else {
-				// other types except feature points
-				planeResults = planeResults.sort((a, b) => a.point.distance - b.point.distance)
-				info = planeResults[0]
-			}
-		} else if(data.points.length > 0) {
-			// feature points if any
-			info = data.points[0]
-		}
-		return info
-	}
+        if (planeExistingUsingExtentResults.length) {
+            // existing planes using extent first
+            planeExistingUsingExtentResults = planeExistingUsingExtentResults.sort((a, b) => a.distance - b.distance)
+            info = planeExistingUsingExtentResults[0]
+        } else if (planeExistingResults.length) {
+            // then other existing planes
+            planeExistingResults = planeExistingResults.sort((a, b) => a.distance - b.distance)
+            info = planeExistingResults[0]
+        } else if (planeResults.length) {
+            // other types except feature points
+            planeResults = planeResults.sort((a, b) => a.distance - b.distance)
+            info = planeResults[0]
+        } else {
+            // feature points if any
+            info = data[0]
+        }
+        return info
+    }
 }

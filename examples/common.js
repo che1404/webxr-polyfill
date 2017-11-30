@@ -172,7 +172,7 @@ class XRExampleBase {
 
 	_handleFrame(frame){
 		const nextFrameRequest = this.session.requestFrame(this._boundHandleFrame)
-		const headPose = frame.getViewPose(frame.getCoordinateSystem(XRCoordinateSystem.HEAD_MODEL))
+		const headPose = frame.getDisplayPose(frame.getCoordinateSystem(XRCoordinateSystem.HEAD_MODEL))
 
 		// If we haven't already, request the floor anchor offset
 		if(this.requestedFloor === false){
@@ -241,16 +241,8 @@ class XRExampleBase {
 			throttledConsoleLog('Unknown anchor uid', anchorOffset.anchorUID)
 			return
 		}
-
 		node.matrixAutoUpdate = false
-		const offsetCoordinates = anchorOffset.getTransformedCoordinates(anchor)
-		if(offsetCoordinates.coordinateSystem.type === XRCoordinateSystem.TRACKER){
-			node.matrix.fromArray(offsetCoordinates.poseMatrix)
-		} else {
-			node.matrix.fromArray(
-				offsetCoordinates.getTransformedCoordinates(frame.getCoordinateSystem(XRCoordinateSystem.TRACKER)).poseMatrix
-			)
-		}
+		node.matrix.fromArray(anchorOffset.getOffsetTransform(anchor.coordinateSystem))
 		node.updateMatrixWorld(true)
 	}
 }
